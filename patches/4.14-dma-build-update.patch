@@ -1,0 +1,390 @@
+From 1cc580387a42a112ed7a35365c7fcf9338f8b039 Mon Sep 17 00:00:00 2001
+From: Syping <syping@syping.de>
+Date: Tue, 11 Feb 2020 02:42:56 +0100
+Subject: [PATCH] kernel 4.14 dma build update
+
+---
+ mali_kbase_defs.h       |   4 ++
+ mali_kbase_dma_fence.c  | 100 ++++++++++++++++++++++++++++++++++++++--
+ mali_kbase_dma_fence.h  |  12 ++++-
+ mali_kbase_jd.c         |   4 ++
+ mali_kbase_jd_debugfs.c |  16 +++++++
+ 5 files changed, 132 insertions(+), 4 deletions(-)
+
+diff --git a/mali_kbase_defs.h b/mali_kbase_defs.h
+index 290d460..c3b8056 100644
+--- a/mali_kbase_defs.h
++++ b/mali_kbase_defs.h
+@@ -453,7 +453,11 @@ struct kbase_jd_atom {
+ 		 * regardless of the event_code of the katom (signal also on
+ 		 * failure).
+ 		 */
++#if (LINUX_VERSION_CODE < KERNEL_VERSION(4, 10, 0))
+ 		struct fence *fence;
++#else
++		struct dma_fence *fence;
++#endif
+ 		/* The dma-buf fence context number for this atom. A unique
+ 		 * context number is allocated to each katom in the context on
+ 		 * context creation.
+diff --git a/mali_kbase_dma_fence.c b/mali_kbase_dma_fence.c
+index 97bb6c5..de8188c 100644
+--- a/mali_kbase_dma_fence.c
++++ b/mali_kbase_dma_fence.c
+@@ -22,7 +22,11 @@
+ #include "mali_kbase_dma_fence.h"
+ 
+ #include <linux/atomic.h>
++#if (LINUX_VERSION_CODE < KERNEL_VERSION(4, 10, 0))
+ #include <linux/fence.h>
++#else
++#include <linux/dma-fence.h>
++#endif
+ #include <linux/list.h>
+ #include <linux/lockdep.h>
+ #include <linux/mutex.h>
+@@ -56,19 +60,31 @@ kbase_dma_fence_waiters_remove(struct kbase_jd_atom *katom)
+ }
+ 
+ static const char *
++#if (LINUX_VERSION_CODE < KERNEL_VERSION(4, 10, 0))
+ kbase_dma_fence_get_driver_name(struct fence *fence)
++#else
++kbase_dma_fence_get_driver_name(struct dma_fence *fence)
++#endif
+ {
+ 	return kbase_drv_name;
+ }
+ 
+ static const char *
++#if (LINUX_VERSION_CODE < KERNEL_VERSION(4, 10, 0))
+ kbase_dma_fence_get_timeline_name(struct fence *fence)
++#else
++kbase_dma_fence_get_timeline_name(struct dma_fence *fence)
++#endif
+ {
+ 	return kbase_timeline_name;
+ }
+ 
+ static bool
++#if (LINUX_VERSION_CODE < KERNEL_VERSION(4, 10, 0))
+ kbase_dma_fence_enable_signaling(struct fence *fence)
++#else
++kbase_dma_fence_enable_signaling(struct dma_fence *fence)
++#endif
+ {
+ 	/* If in the future we need to add code here remember to
+ 	 * to get a reference to the fence and release it when signaling
+@@ -78,30 +94,55 @@ kbase_dma_fence_enable_signaling(struct fence *fence)
+ }
+ 
+ static void
++#if (LINUX_VERSION_CODE < KERNEL_VERSION(4, 10, 0))
+ kbase_dma_fence_fence_value_str(struct fence *fence, char *str, int size)
++#else
++kbase_dma_fence_fence_value_str(struct dma_fence *fence, char *str, int size)
++#endif
+ {
+ 	snprintf(str, size, "%u", fence->seqno);
+ }
+ 
++#if (LINUX_VERSION_CODE < KERNEL_VERSION(4, 10, 0))
+ static const struct fence_ops kbase_dma_fence_ops = {
++#else
++static const struct dma_fence_ops kbase_dma_fence_ops = {
++#endif
+ 	.get_driver_name = kbase_dma_fence_get_driver_name,
+ 	.get_timeline_name = kbase_dma_fence_get_timeline_name,
+ 	.enable_signaling = kbase_dma_fence_enable_signaling,
+ 	/* Use the default wait */
++#if (LINUX_VERSION_CODE < KERNEL_VERSION(4, 10, 0))
+ 	.wait = fence_default_wait,
++#else
++	.wait = dma_fence_default_wait,
++#endif
+ 	.fence_value_str = kbase_dma_fence_fence_value_str,
+ };
+ 
++#if (LINUX_VERSION_CODE < KERNEL_VERSION(4, 10, 0))
+ static struct fence *
++#else
++static struct dma_fence *
++#endif
+ kbase_dma_fence_new(unsigned int context, unsigned int seqno)
+ {
++#if (LINUX_VERSION_CODE < KERNEL_VERSION(4, 10, 0))
+ 	struct fence *fence;
++#else
++	struct dma_fence *fence;
++#endif
+ 
+ 	fence = kzalloc(sizeof(*fence), GFP_KERNEL);
+ 	if (!fence)
+ 		return NULL;
+ 
+-	fence_init(fence,
++#if (LINUX_VERSION_CODE < KERNEL_VERSION(4, 10, 0))
++	fence_init(
++#else
++	dma_fence_init(
++#endif
++		   fence,
+ 		   &kbase_dma_fence_ops,
+ 		   &kbase_dma_fence_lock,
+ 		   context,
+@@ -212,7 +253,12 @@ kbase_dma_fence_free_callbacks(struct kbase_jd_atom *katom, bool queue_worker)
+ 		bool ret;
+ 
+ 		/* Cancel callbacks that hasn't been called yet. */
+-		ret = fence_remove_callback(cb->fence, &cb->fence_cb);
++#if (LINUX_VERSION_CODE < KERNEL_VERSION(4, 10, 0))
++		ret = fence_remove_callback(
++#else
++		ret = dma_fence_remove_callback(
++#endif
++			   cb->fence, &cb->fence_cb);
+ 		if (ret) {
+ 			int ret;
+ 
+@@ -235,7 +281,11 @@ kbase_dma_fence_free_callbacks(struct kbase_jd_atom *katom, bool queue_worker)
+ 		 * Release the reference taken in
+ 		 * kbase_dma_fence_add_callback().
+ 		 */
++#if (LINUX_VERSION_CODE < KERNEL_VERSION(4, 10, 0))
+ 		fence_put(cb->fence);
++#else
++		dma_fence_put(cb->fence);
++#endif
+ 		list_del(&cb->node);
+ 		kfree(cb);
+ 	}
+@@ -329,8 +379,13 @@ out:
+  */
+ static int
+ kbase_dma_fence_add_callback(struct kbase_jd_atom *katom,
++#if (LINUX_VERSION_CODE < KERNEL_VERSION(4, 10, 0))
+ 			     struct fence *fence,
+ 			     fence_func_t callback)
++#else
++			     struct dma_fence *fence,
++			     dma_fence_func_t callback)
++#endif
+ {
+ 	int err = 0;
+ 	struct kbase_dma_fence_cb *kbase_fence_cb;
+@@ -343,7 +398,12 @@ kbase_dma_fence_add_callback(struct kbase_jd_atom *katom,
+ 	kbase_fence_cb->katom = katom;
+ 	INIT_LIST_HEAD(&kbase_fence_cb->node);
+ 
+-	err = fence_add_callback(fence, &kbase_fence_cb->fence_cb, callback);
++#if (LINUX_VERSION_CODE < KERNEL_VERSION(4, 10, 0))
++	err = fence_add_callback(
++#else
++	err = dma_fence_add_callback(
++#endif
++		   fence, &kbase_fence_cb->fence_cb, callback);
+ 	if (err == -ENOENT) {
+ 		/* Fence signaled, clear the error and return */
+ 		err = 0;
+@@ -356,7 +416,11 @@ kbase_dma_fence_add_callback(struct kbase_jd_atom *katom,
+ 		 * Get reference to fence that will be kept until callback gets
+ 		 * cleaned up in kbase_dma_fence_free_callbacks().
+ 		 */
++#if (LINUX_VERSION_CODE < KERNEL_VERSION(4, 10, 0))
+ 		fence_get(fence);
++#else
++		dma_fence_get(fence);
++#endif
+ 		atomic_inc(&katom->dma_fence.dep_count);
+ 		/* Add callback to katom's list of callbacks */
+ 		list_add(&kbase_fence_cb->node, &katom->dma_fence.callbacks);
+@@ -366,7 +430,11 @@ kbase_dma_fence_add_callback(struct kbase_jd_atom *katom,
+ }
+ 
+ static void
++#if (LINUX_VERSION_CODE < KERNEL_VERSION(4, 10, 0))
+ kbase_dma_fence_cb(struct fence *fence, struct fence_cb *cb)
++#else
++kbase_dma_fence_cb(struct dma_fence *fence, struct dma_fence_cb *cb)
++#endif
+ {
+ 	struct kbase_dma_fence_cb *kcb = container_of(cb,
+ 				struct kbase_dma_fence_cb,
+@@ -386,8 +454,13 @@ kbase_dma_fence_add_reservation_callback(struct kbase_jd_atom *katom,
+ 					 struct reservation_object *resv,
+ 					 bool exclusive)
+ {
++#if (LINUX_VERSION_CODE < KERNEL_VERSION(4, 10, 0))
+ 	struct fence *excl_fence = NULL;
+ 	struct fence **shared_fences = NULL;
++#else
++	struct dma_fence *excl_fence = NULL;
++	struct dma_fence **shared_fences = NULL;
++#endif
+ 	unsigned int shared_count = 0;
+ 	int err, i;
+ 
+@@ -408,7 +481,11 @@ kbase_dma_fence_add_reservation_callback(struct kbase_jd_atom *katom,
+ 		 * and it's the fence's owner is responsible for singling the fence
+ 		 * before allowing it to disappear.
+ 		 */
++#if (LINUX_VERSION_CODE < KERNEL_VERSION(4, 10, 0))
+ 		fence_put(excl_fence);
++#else
++		dma_fence_put(excl_fence);
++#endif
+ 
+ 		if (err)
+ 			goto out;
+@@ -431,7 +508,11 @@ kbase_dma_fence_add_reservation_callback(struct kbase_jd_atom *katom,
+ 	 */
+ out:
+ 	for (i = 0; i < shared_count; i++)
++#if (LINUX_VERSION_CODE < KERNEL_VERSION(4, 10, 0))
+ 		fence_put(shared_fences[i]);
++#else
++		dma_fence_put(shared_fences[i]);
++#endif
+ 	kfree(shared_fences);
+ 
+ 	if (err) {
+@@ -468,7 +549,11 @@ int kbase_dma_fence_wait(struct kbase_jd_atom *katom,
+ 			 struct kbase_dma_fence_resv_info *info)
+ {
+ 	int err, i;
++#if (LINUX_VERSION_CODE < KERNEL_VERSION(4, 10, 0))
+ 	struct fence *fence;
++#else
++	struct dma_fence *fence;
++#endif
+ 	struct ww_acquire_ctx ww_ctx;
+ 
+ 	lockdep_assert_held(&katom->kctx->jctx.lock);
+@@ -490,7 +575,11 @@ int kbase_dma_fence_wait(struct kbase_jd_atom *katom,
+ 		dev_err(katom->kctx->kbdev->dev,
+ 			"Error %d locking reservations.\n", err);
+ 		atomic_set(&katom->dma_fence.dep_count, -1);
++#if (LINUX_VERSION_CODE < KERNEL_VERSION(4, 10, 0))
+ 		fence_put(fence);
++#else
++		dma_fence_put(fence);
++#endif
+ 		return err;
+ 	}
+ 
+@@ -580,8 +669,13 @@ void kbase_dma_fence_signal(struct kbase_jd_atom *katom)
+ 	KBASE_DEBUG_ASSERT(atomic_read(&katom->dma_fence.dep_count) == -1);
+ 
+ 	/* Signal the atom's fence. */
++#if (LINUX_VERSION_CODE < KERNEL_VERSION(4, 10, 0))
+ 	fence_signal(katom->dma_fence.fence);
+ 	fence_put(katom->dma_fence.fence);
++#else
++	dma_fence_signal(katom->dma_fence.fence);
++	dma_fence_put(katom->dma_fence.fence);
++#endif
+ 	katom->dma_fence.fence = NULL;
+ 
+ 	kbase_dma_fence_free_callbacks(katom, false);
+diff --git a/mali_kbase_dma_fence.h b/mali_kbase_dma_fence.h
+index 3b0a69b..4a8b10c 100644
+--- a/mali_kbase_dma_fence.h
++++ b/mali_kbase_dma_fence.h
+@@ -20,7 +20,12 @@
+ 
+ #ifdef CONFIG_MALI_DMA_FENCE
+ 
++#include <linux/version.h>
++#if (LINUX_VERSION_CODE < KERNEL_VERSION(4, 10, 0))
+ #include <linux/fence.h>
++#else
++#include <linux/dma-fence.h>
++#endif
+ #include <linux/list.h>
+ #include <linux/reservation.h>
+ 
+@@ -37,9 +42,14 @@ struct kbase_context;
+  * @node:     List head for linking this callback to the katom
+  */
+ struct kbase_dma_fence_cb {
++#if (LINUX_VERSION_CODE < KERNEL_VERSION(4, 10, 0))
+ 	struct fence_cb fence_cb;
+-	struct kbase_jd_atom *katom;
+ 	struct fence *fence;
++#else
++	struct dma_fence_cb fence_cb;
++	struct dma_fence *fence;
++#endif
++	struct kbase_jd_atom *katom;
+ 	struct list_head node;
+ };
+ 
+diff --git a/mali_kbase_jd.c b/mali_kbase_jd.c
+index 596b047..6cd4b61 100644
+--- a/mali_kbase_jd.c
++++ b/mali_kbase_jd.c
+@@ -1847,7 +1847,11 @@ int kbase_jd_init(struct kbase_context *kctx)
+ 		kctx->jctx.atoms[i].status = KBASE_JD_ATOM_STATE_UNUSED;
+ 
+ #ifdef CONFIG_MALI_DMA_FENCE
++#if (LINUX_VERSION_CODE < KERNEL_VERSION(4, 10, 0))
+ 		kctx->jctx.atoms[i].dma_fence.context = fence_context_alloc(1);
++#else
++		kctx->jctx.atoms[i].dma_fence.context = dma_fence_context_alloc(1);
++#endif
+ 		atomic_set(&kctx->jctx.atoms[i].dma_fence.seqno, 0);
+ 		INIT_LIST_HEAD(&kctx->jctx.atoms[i].dma_fence.callbacks);
+ #endif
+diff --git a/mali_kbase_jd_debugfs.c b/mali_kbase_jd_debugfs.c
+index 47ea426..c04cfac 100644
+--- a/mali_kbase_jd_debugfs.c
++++ b/mali_kbase_jd_debugfs.c
+@@ -71,7 +71,11 @@ static void kbase_jd_debugfs_fence_info(struct kbase_jd_atom *atom,
+ 		struct kbase_dma_fence_cb *cb;
+ 
+ 		if (atom->dma_fence.fence) {
++#if (LINUX_VERSION_CODE < KERNEL_VERSION(4, 10, 0))
+ 			struct fence *fence = atom->dma_fence.fence;
++#else
++			struct dma_fence *fence = atom->dma_fence.fence;
++#endif
+ 
+ 			seq_printf(sfile,
+ #if (LINUX_VERSION_CODE < KERNEL_VERSION(4, 8, 0))
+@@ -81,13 +85,21 @@ static void kbase_jd_debugfs_fence_info(struct kbase_jd_atom *atom,
+ #endif
+ 					fence->context,
+ 					fence->seqno,
++#if (LINUX_VERSION_CODE < KERNEL_VERSION(4, 10, 0))
+ 					fence_is_signaled(fence) ?
++#else
++					dma_fence_is_signaled(fence) ?
++#endif
+ 						"signaled" : "active");
+ 		}
+ 
+ 		list_for_each_entry(cb, &atom->dma_fence.callbacks,
+ 				    node) {
++#if (LINUX_VERSION_CODE < KERNEL_VERSION(4, 10, 0))
+ 			struct fence *fence = cb->fence;
++#else
++			struct dma_fence *fence = cb->fence;
++#endif
+ 
+ 			seq_printf(sfile,
+ #if (LINUX_VERSION_CODE < KERNEL_VERSION(4, 8, 0))
+@@ -97,7 +109,11 @@ static void kbase_jd_debugfs_fence_info(struct kbase_jd_atom *atom,
+ #endif
+ 					fence->context,
+ 					fence->seqno,
++#if (LINUX_VERSION_CODE < KERNEL_VERSION(4, 10, 0))
+ 					fence_is_signaled(fence) ?
++#else
++					dma_fence_is_signaled(fence) ?
++#endif
+ 						"signaled" : "active");
+ 		}
+ 	}
+-- 
+2.25.0
+
